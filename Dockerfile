@@ -39,6 +39,8 @@ RUN mkdir -p $GOPATH/bin
 
 # Install Go-based security tools
 RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 # Install WhatWeb from GitHub (Ruby-based tool)
 RUN git clone --depth 1 https://github.com/urbanadventurer/WhatWeb.git /opt/whatweb && \
     chmod +x /opt/whatweb/whatweb && \
@@ -48,7 +50,7 @@ RUN git clone --depth 1 https://github.com/urbanadventurer/WhatWeb.git /opt/what
     chmod +x /usr/local/bin/whatweb
 
 # Install Python-based tools
-RUN pip3 install --no-cache-dir schemathesis
+RUN pip3 install --no-cache-dir schemathesis sqlmap
 
 # Runtime stage - Minimal production image
 FROM cgr.dev/chainguard/wolfi-base:latest AS runtime
@@ -89,6 +91,8 @@ RUN apk update && apk add --no-cache \
 
 # Copy Go binaries from builder
 COPY --from=builder /go/bin/subfinder /usr/local/bin/
+COPY --from=builder /go/bin/httpx /usr/local/bin/
+COPY --from=builder /go/bin/nuclei /usr/local/bin/
 
 # Copy WhatWeb from builder
 COPY --from=builder /opt/whatweb /opt/whatweb
@@ -100,6 +104,7 @@ RUN gem install addressable
 # Copy Python packages from builder
 COPY --from=builder /usr/lib/python3.*/site-packages /usr/lib/python3.12/site-packages
 COPY --from=builder /usr/bin/schemathesis /usr/bin/
+COPY --from=builder /usr/bin/sqlmap /usr/bin/
 
 # Create non-root user for security
 RUN addgroup -g 1001 pentest && \

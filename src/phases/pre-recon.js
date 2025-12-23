@@ -44,6 +44,19 @@ async function runTerminalScan(tool, target, sourceDir = null) {
         timingResults.commands[tool] = whatwebDuration;
         console.log(chalk.green(`    ✅ ${tool} completed in ${formatDuration(whatwebDuration)}`));
         return { tool: 'whatweb', output: result.stdout, status: 'success', duration: whatwebDuration };
+      case 'naabu':
+        console.log(chalk.blue(`    🔍 Running ${tool} scan...`));
+        try {
+          const naabuHostname = new URL(target).hostname;
+          result = await $({ silent: true, stdio: ['ignore', 'pipe', 'ignore'] })`naabu -host ${naabuHostname}`;
+        } catch (naabuError) {
+          // Pass through to outer catch for uniform handling
+          throw naabuError;
+        }
+        const naabuDuration = timer.stop();
+        timingResults.commands[tool] = naabuDuration;
+        console.log(chalk.green(`    ✅ ${tool} completed in ${formatDuration(naabuDuration)}`));
+        return { tool: 'naabu', output: result.stdout, status: 'success', duration: naabuDuration };
       case 'schemathesis':
         // Only run if API schemas found
         const schemasDir = path.join(sourceDir || '.', 'outputs', 'schemas');
@@ -77,6 +90,41 @@ async function runTerminalScan(tool, target, sourceDir = null) {
           console.log(chalk.gray(`    ⏭️ ${tool} - schemas directory not found`));
           return { tool: 'schemathesis', output: 'Schemas directory not found', status: 'skipped', duration: timer.stop() };
         }
+      case 'httpx':
+        console.log(chalk.blue(`    🔍 Running ${tool} scan...`));
+        try {
+          result = await $({ silent: true, stdio: ['ignore', 'pipe', 'ignore'] })`httpx -u ${target} -status-code -title -tech-detect -follow-redirects -nc`;
+        } catch (httpxError) {
+          throw httpxError;
+        }
+        const httpxDuration = timer.stop();
+        timingResults.commands[tool] = httpxDuration;
+        console.log(chalk.green(`    ✅ ${tool} completed in ${formatDuration(httpxDuration)}`));
+        return { tool: 'httpx', output: result.stdout, status: 'success', duration: httpxDuration };
+      case 'nuclei':
+        console.log(chalk.blue(`    🔍 Running ${tool} scan...`));
+        try {
+          // Run with default templates; if templates missing, nuclei will attempt to fetch. Errors handled below.
+          result = await $({ silent: true, stdio: ['ignore', 'pipe', 'ignore'] })`nuclei -u ${target} -severity medium,high,critical -silent`;
+        } catch (nucleiError) {
+          throw nucleiError;
+        }
+        const nucleiDuration = timer.stop();
+        timingResults.commands[tool] = nucleiDuration;
+        console.log(chalk.green(`    ✅ ${tool} completed in ${formatDuration(nucleiDuration)}`));
+        return { tool: 'nuclei', output: result.stdout || 'No findings', status: 'success', duration: nucleiDuration };
+      case 'sqlmap':
+        console.log(chalk.blue(`    🔍 Running ${tool} scan...`));
+        try {
+          // Conservative flags; may produce limited results for plain root URLs
+          result = await $({ silent: true, stdio: ['ignore', 'pipe', 'ignore'] })`sqlmap -u ${target} --batch --crawl=1 --level=1 --risk=1 --random-agent --flush-session`;
+        } catch (sqlmapError) {
+          throw sqlmapError;
+        }
+        const sqlmapDuration = timer.stop();
+        timingResults.commands[tool] = sqlmapDuration;
+        console.log(chalk.green(`    ✅ ${tool} completed in ${formatDuration(sqlmapDuration)}`));
+        return { tool: 'sqlmap', output: result.stdout, status: 'success', duration: sqlmapDuration };
       default:
         throw new Error(`Unknown tool: ${tool}`);
     }
@@ -89,49 +137,60 @@ async function runTerminalScan(tool, target, sourceDir = null) {
 }
 
 // Wave 1: Initial footprinting + authentication
-async function runPreReconWave1(webUrl, sourceDir, variables, config, pipelineTestingMode = false, sessionId = null) {
+async function runPreReconWave1(webUrl, sourceDir, variables, config, toolAvailability, pipelineTestingMode = false, sessionId = null) {
   console.log(chalk.blue('    → Launching Wave 1 operations in parallel...'));
 
   const operations = [];
 
   // Skip external commands in pipeline testing mode
+  const isBlackbox = global.SHANNON_BLACKBOX === true;
+
   if (pipelineTestingMode) {
     console.log(chalk.gray('    ⏭️ Skipping external tools (pipeline testing mode)'));
-    operations.push(
-      runClaudePromptWithRetry(
-        await loadPrompt('pre-recon-code', variables, null, pipelineTestingMode),
-        sourceDir,
-        '*',
-        '',
-        AGENTS['pre-recon'].displayName,
-        'pre-recon',  // Agent name for snapshot creation
-        chalk.cyan,
-        { id: sessionId, webUrl }  // Session metadata for audit logging (STANDARD: use 'id' field)
-      )
-    );
-    const [codeAnalysis] = await Promise.all(operations);
+    if (!isBlackbox) {
+      operations.push(
+        runClaudePromptWithRetry(
+          await loadPrompt('pre-recon-code', variables, null, pipelineTestingMode),
+          sourceDir,
+          '*',
+          '',
+          AGENTS['pre-recon'].displayName,
+          'pre-recon',  // Agent name for snapshot creation
+          chalk.cyan,
+          { id: sessionId, webUrl }  // Session metadata for audit logging (STANDARD: use 'id' field)
+        )
+      );
+    }
+    const [codeAnalysis] = operations.length ? await Promise.all(operations) : [null];
     return {
       nmap: 'Skipped (pipeline testing mode)',
       subfinder: 'Skipped (pipeline testing mode)',
       whatweb: 'Skipped (pipeline testing mode)',
+      naabu: 'Skipped (pipeline testing mode)',
 
-      codeAnalysis
+      codeAnalysis: isBlackbox ? { tool: 'code-analysis', output: 'Skipped (blackbox mode)', status: 'skipped', duration: 0 } : codeAnalysis
     };
   } else {
     operations.push(
       runTerminalScan('nmap', webUrl),
       runTerminalScan('subfinder', webUrl),
       runTerminalScan('whatweb', webUrl),
-      runClaudePromptWithRetry(
-        await loadPrompt('pre-recon-code', variables, null, pipelineTestingMode),
-        sourceDir,
-        '*',
-        '',
-        AGENTS['pre-recon'].displayName,
-        'pre-recon',  // Agent name for snapshot creation
-        chalk.cyan,
-        { id: sessionId, webUrl }  // Session metadata for audit logging (STANDARD: use 'id' field)
-      )
+      // Optional: naabu for fast port discovery
+      toolAvailability?.naabu
+        ? runTerminalScan('naabu', webUrl)
+        : Promise.resolve({ tool: 'naabu', output: 'Tool not available', status: 'skipped', duration: 0 }),
+      ...(isBlackbox ? [] : [
+        runClaudePromptWithRetry(
+          await loadPrompt('pre-recon-code', variables, null, pipelineTestingMode),
+          sourceDir,
+          '*',
+          '',
+          AGENTS['pre-recon'].displayName,
+          'pre-recon',  // Agent name for snapshot creation
+          chalk.cyan,
+          { id: sessionId, webUrl }  // Session metadata for audit logging (STANDARD: use 'id' field)
+        )
+      ])
     );
   }
 
@@ -140,7 +199,7 @@ async function runPreReconWave1(webUrl, sourceDir, variables, config, pipelineTe
 
   const [nmap, subfinder, whatweb, naabu, codeAnalysis] = await Promise.all(operations);
 
-  return { nmap, subfinder, whatweb, naabu, codeAnalysis };
+  return { nmap, subfinder, whatweb, naabu, codeAnalysis: isBlackbox ? { tool: 'code-analysis', output: 'Skipped (blackbox mode)', status: 'skipped', duration: 0 } : codeAnalysis };
 }
 
 // Wave 2: Additional scanning
@@ -161,6 +220,15 @@ async function runPreReconWave2(webUrl, sourceDir, toolAvailability, pipelineTes
 
   if (toolAvailability.schemathesis) {
     operations.push(runTerminalScan('schemathesis', webUrl, sourceDir));
+  }
+  if (toolAvailability.httpx) {
+    operations.push(runTerminalScan('httpx', webUrl, sourceDir));
+  }
+  if (toolAvailability.nuclei) {
+    operations.push(runTerminalScan('nuclei', webUrl, sourceDir));
+  }
+  if (toolAvailability.sqlmap) {
+    operations.push(runTerminalScan('sqlmap', webUrl, sourceDir));
   }
 
   // If no tools are available, return early
@@ -183,6 +251,21 @@ async function runPreReconWave2(webUrl, sourceDir, toolAvailability, pipelineTes
   } else {
     console.log(chalk.gray('    ⏭️ schemathesis - tool not available'));
     response.schemathesis = { tool: 'schemathesis', output: 'Tool not available', status: 'skipped', duration: 0 };
+  }
+  if (toolAvailability.httpx) {
+    response.httpx = results[resultIndex++];
+  } else {
+    response.httpx = { tool: 'httpx', output: 'Tool not available', status: 'skipped', duration: 0 };
+  }
+  if (toolAvailability.nuclei) {
+    response.nuclei = results[resultIndex++];
+  } else {
+    response.nuclei = { tool: 'nuclei', output: 'Tool not available', status: 'skipped', duration: 0 };
+  }
+  if (toolAvailability.sqlmap) {
+    response.sqlmap = results[resultIndex++];
+  } else {
+    response.sqlmap = { tool: 'sqlmap', output: 'Tool not available', status: 'skipped', duration: 0 };
   }
 
   return response;
@@ -207,7 +290,7 @@ async function stitchPreReconOutputs(outputs, sourceDir) {
   // Build additional scans section
   let additionalSection = '';
   if (additionalScans && additionalScans.length > 0) {
-    additionalSection = '\n## Authenticated Scans\n';
+    additionalSection = '\n## Additional DAST Scans\n';
     additionalScans.forEach(scan => {
       if (scan && scan.tool) {
         additionalSection += `
@@ -264,12 +347,12 @@ Report generated at: ${new Date().toISOString()}
 }
 
 // Main pre-recon phase execution function
-export async function executePreReconPhase(webUrl, sourceDir, variables, config, toolAvailability, pipelineTestingMode, sessionId = null) {
+export async function executePreReconPhase(webUrl, sourceDir, variables, config, toolAvailability, pipelineTestingMode, blackboxMode = false, sessionId = null) {
   console.log(chalk.yellow.bold('\n🔍 PHASE 1: PRE-RECONNAISSANCE'));
   const timer = new Timer('phase-1-pre-recon');
 
   console.log(chalk.yellow('Wave 1: Initial footprinting...'));
-  const wave1Results = await runPreReconWave1(webUrl, sourceDir, variables, config, pipelineTestingMode, sessionId);
+  const wave1Results = await runPreReconWave1(webUrl, sourceDir, variables, config, toolAvailability, pipelineTestingMode, sessionId);
   console.log(chalk.green('  ✅ Wave 1 operations completed'));
 
   console.log(chalk.yellow('Wave 2: Additional scanning...'));
@@ -283,7 +366,7 @@ export async function executePreReconPhase(webUrl, sourceDir, variables, config,
     wave1Results.subfinder,
     wave1Results.whatweb,
     wave1Results.naabu,
-    wave1Results.codeAnalysis,
+    blackboxMode ? { tool: 'code-analysis', output: 'Skipped (blackbox mode)', status: 'skipped', duration: 0 } : wave1Results.codeAnalysis,
     ...(wave2Results.schemathesis ? [wave2Results.schemathesis] : [])
   ];
   const preReconReport = await stitchPreReconOutputs(allResults, sourceDir);

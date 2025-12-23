@@ -1,0 +1,8 @@
+model_list:
+  - model_name: llama3.1:8b
+    litellm_params:
+      model: ollama/llama3.1:8b
+      api_base: http://192.168.1.69:11434
+
+general_settings:
+  port: 4000

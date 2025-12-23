@@ -6,7 +6,7 @@
 
 import { $, fs, path } from 'zx';
 import chalk from 'chalk';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query } from './llm-adapter.js';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
@@ -57,6 +57,13 @@ async function validateAgentOutput(result, agentName, sourceDir) {
   console.log(chalk.blue(`    🔍 Validating ${agentName} agent output`));
 
   try {
+    // Relaxed validation path for text-only adapters (e.g., OpenAI/Ollama)
+    const isTextOnly = (process.env.SHANNON_LLM_PROVIDER || '').toLowerCase() === 'openai';
+    if (global.SHANNON_RELAX_VALIDATION && isTextOnly && (agentName === 'pre-recon' || agentName === 'recon')) {
+      console.log(chalk.yellow(`    ⚠️  Relaxed validation enabled for ${agentName} (text-only adapter).`));
+      return true;
+    }
+
     // Check if agent completed successfully
     if (!result.success || !result.result) {
       console.log(chalk.red(`    ❌ Validation failed: Agent execution was unsuccessful`));

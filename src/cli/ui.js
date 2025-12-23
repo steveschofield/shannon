@@ -13,7 +13,10 @@ export function showHelp() {
   console.log(chalk.gray('Automated security assessment tool\n'));
 
   console.log(chalk.yellow.bold('NORMAL MODE (Creates Sessions):'));
-  console.log('  ./shannon.mjs <WEB_URL> <REPO_PATH> [--config config.yaml] [--pipeline-testing]');
+  console.log('  ./shannon.mjs <WEB_URL> <REPO_PATH> [--config config.yaml] [--pipeline-testing] [--blackbox]');
+  console.log('  ./shannon.mjs <WEB_URL> --blackbox                                   # URL-only blackbox run');
+  console.log('  ./shannon.mjs <WEB_URL> --blackbox --skip-mcp-phases                  # Stop after Pre‑Recon for text-only adapters');
+  console.log('  ./shannon.mjs <WEB_URL> <REPO_PATH> --relax-validation                # Relax validation for text-only adapters');
   console.log('  ./shannon.mjs <WEB_URL> <REPO_PATH> --setup-only                     # Setup local repo and create session only\n');
 
   console.log(chalk.yellow.bold('DEVELOPER MODE (Operates on Existing Sessions):'));
@@ -28,6 +31,9 @@ export function showHelp() {
   console.log(chalk.yellow.bold('OPTIONS:'));
   console.log('  --config <file>      YAML configuration file for authentication and testing parameters');
   console.log('  --pipeline-testing   Use minimal prompts for fast pipeline testing (creates minimal deliverables)');
+  console.log('  --blackbox           Do not use source code; run URL-only (REPO_PATH optional)');
+  console.log('  --skip-mcp-phases    Skip phases requiring MCP/browser (useful with OpenAI/Ollama text-only)');
+  console.log('  --relax-validation   Relax validation (e.g., pre-recon deliverables) when using text-only adapters');
   console.log('  --disable-loader     Disable the animated progress loader (useful when logs interfere with spinner)\n');
 
   console.log(chalk.yellow.bold('DEVELOPER COMMANDS:'));
@@ -43,6 +49,7 @@ export function showHelp() {
   console.log('  # Normal mode - create new session');
   console.log('  ./shannon.mjs "https://example.com" "/path/to/local/repo"');
   console.log('  ./shannon.mjs "https://example.com" "/path/to/local/repo" --config auth.yaml');
+  console.log('  ./shannon.mjs "https://example.com" --blackbox                      # Skip local code, URL-only');
   console.log('  ./shannon.mjs "https://example.com" "/path/to/local/repo" --setup-only  # Setup only\n');
 
   console.log('  # Developer mode - operate on existing session');

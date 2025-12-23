@@ -9,7 +9,7 @@ import chalk from 'chalk';
 
 // Check availability of required tools
 export const checkToolAvailability = async () => {
-  const tools = ['nmap', 'subfinder', 'whatweb', 'schemathesis'];
+  const tools = ['nmap', 'subfinder', 'whatweb', 'schemathesis', 'naabu', 'httpx', 'nuclei', 'sqlmap'];
   const availability = {};
   
   console.log(chalk.blue('🔧 Checking tool availability...'));
@@ -43,7 +43,11 @@ export const handleMissingTools = (toolAvailability) => {
       'nmap': 'brew install nmap (macOS) or apt install nmap (Ubuntu)',
       'subfinder': 'go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest',
       'whatweb': 'gem install whatweb',
-      'schemathesis': 'pip install schemathesis'
+      'schemathesis': 'pip install schemathesis',
+      'naabu': 'go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest',
+      'httpx': 'go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest',
+      'nuclei': 'go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest',
+      'sqlmap': 'pip install sqlmap'
     };
     
     console.log(chalk.gray('\nInstallation hints:'));

@@ -66,19 +66,24 @@ process.on('SIGTERM', async () => {
 });
 
 // Main orchestration function
-async function main(webUrl, repoPath, configPath = null, pipelineTestingMode = false, disableLoader = false) {
+async function main(webUrl, repoPath, configPath = null, pipelineTestingMode = false, disableLoader = false, blackboxMode = false, skipMcpPhases = false) {
   // Set global flag for loader control
   global.SHANNON_DISABLE_LOADER = disableLoader;
+  // Set global for relaxed validation (also allow env override)
+  global.SHANNON_RELAX_VALIDATION = (process.env.SHANNON_RELAX_VALIDATION === '1') || relaxValidation || false;
 
   const totalTimer = new Timer('total-execution');
   timingResults.total = totalTimer;
+
+  // Set global flag for blackbox
+  global.SHANNON_BLACKBOX = !!blackboxMode;
 
   // Display splash screen
   await displaySplashScreen();
 
   console.log(chalk.cyan.bold('🚀 AI PENETRATION TESTING AGENT'));
   console.log(chalk.cyan(`🎯 Target: ${webUrl}`));
-  console.log(chalk.cyan(`📁 Source: ${repoPath}`));
+  console.log(chalk.cyan(`📁 Source: ${repoPath}${blackboxMode ? ' (blackbox mode)' : ''}`));
   if (configPath) {
     console.log(chalk.cyan(`⚙️ Config: ${configPath}`));
   }
@@ -208,10 +213,21 @@ async function main(webUrl, repoPath, configPath = null, pipelineTestingMode = f
       distributedConfig,
       toolAvailability,
       pipelineTestingMode,
+      blackboxMode,
       session.id  // Pass session ID for logging
     );
     timingResults.phases['pre-recon'] = preReconDuration;
     await updateSessionProgress('pre-recon');
+  }
+
+  // If running in text-only mode (e.g., OpenAI/Ollama) and user requested to skip MCP-dependent phases,
+  // exit gracefully after Pre‑Recon.
+  const inferredTextOnly = (process.env.SHANNON_LLM_PROVIDER || '').toLowerCase() === 'openai';
+  const envSkip = (process.env.SHANNON_SKIP_MCP_PHASES || '') === '1';
+  if (skipMcpPhases || (inferredTextOnly && envSkip) || (inferredTextOnly && skipMcpPhases)) {
+    console.log(chalk.yellow('\n⏭️ Skipping MCP-dependent phases (text-only mode).'));
+    await displayTimingSummary(timingResults, costResults, ['pre-recon']);
+    return { reportPath: path.join(sourceDir, 'deliverables', 'pre_recon_deliverable.md'), auditLogsPath: path.join(process.cwd(), 'audit-logs') };
   }
 
   // PHASE 2: RECONNAISSANCE
@@ -371,6 +387,9 @@ if (args[0] && args[0].includes('shannon.mjs')) {
 let configPath = null;
 let pipelineTestingMode = false;
 let disableLoader = false;
+let blackboxMode = false;
+let skipMcpPhases = false;
+let relaxValidation = false;
 const nonFlagArgs = [];
 let developerCommand = null;
 const developerCommands = ['--run-phase', '--run-all', '--rollback-to', '--rerun', '--status', '--list-agents', '--cleanup'];
@@ -388,10 +407,16 @@ for (let i = 0; i < args.length; i++) {
     pipelineTestingMode = true;
   } else if (args[i] === '--disable-loader') {
     disableLoader = true;
+  } else if (args[i] === '--blackbox') {
+    blackboxMode = true;
+  } else if (args[i] === '--skip-mcp-phases') {
+    skipMcpPhases = true;
+  } else if (args[i] === '--relax-validation') {
+    relaxValidation = true;
   } else if (developerCommands.includes(args[i])) {
     developerCommand = args[i];
     // Collect remaining args for the developer command
-    const remainingArgs = args.slice(i + 1).filter(arg => !arg.startsWith('--') || arg === '--pipeline-testing' || arg === '--disable-loader');
+    const remainingArgs = args.slice(i + 1).filter(arg => !arg.startsWith('--') || arg === '--pipeline-testing' || arg === '--disable-loader' || arg === '--blackbox' || arg === '--skip-mcp-phases' || arg === '--relax-validation');
 
     // Check for --pipeline-testing in remaining args
     if (remainingArgs.includes('--pipeline-testing')) {
@@ -402,9 +427,18 @@ for (let i = 0; i < args.length; i++) {
     if (remainingArgs.includes('--disable-loader')) {
       disableLoader = true;
     }
+    if (remainingArgs.includes('--blackbox')) {
+      blackboxMode = true;
+    }
+    if (remainingArgs.includes('--skip-mcp-phases')) {
+      skipMcpPhases = true;
+    }
+    if (remainingArgs.includes('--relax-validation')) {
+      relaxValidation = true;
+    }
 
     // Add non-flag args (excluding --pipeline-testing and --disable-loader)
-    nonFlagArgs.push(...remainingArgs.filter(arg => arg !== '--pipeline-testing' && arg !== '--disable-loader'));
+    nonFlagArgs.push(...remainingArgs.filter(arg => arg !== '--pipeline-testing' && arg !== '--disable-loader' && arg !== '--blackbox' && arg !== '--skip-mcp-phases' && arg !== '--relax-validation'));
     break; // Stop parsing after developer command
   } else if (!args[i].startsWith('-')) {
     nonFlagArgs.push(args[i]);
@@ -435,14 +469,14 @@ if (nonFlagArgs.length === 0) {
 }
 
 // Handle insufficient arguments
-if (nonFlagArgs.length < 2) {
+if (!blackboxMode && nonFlagArgs.length < 2) {
   console.log(chalk.red('❌ Both WEB_URL and REPO_PATH are required'));
   console.log(chalk.gray('Usage: ./shannon.mjs <WEB_URL> <REPO_PATH> [--config config.yaml]'));
   console.log(chalk.gray('Help:  ./shannon.mjs --help'));
   process.exit(1);
 }
 
-const [webUrl, repoPath] = nonFlagArgs;
+const [webUrl, maybeRepoPath] = nonFlagArgs;
 
 // Validate web URL
 const webUrlValidation = validateWebUrl(webUrl);
@@ -452,12 +486,23 @@ if (!webUrlValidation.valid) {
   process.exit(1);
 }
 
-// Validate repository path
-const repoPathValidation = await validateRepoPath(repoPath);
-if (!repoPathValidation.valid) {
-  console.log(chalk.red(`❌ Invalid repository path: ${repoPathValidation.error}`));
-  console.log(chalk.gray(`Expected: Accessible local directory path`));
-  process.exit(1);
+// Resolve/prepare repository path
+let repoPathValidation;
+if (blackboxMode && (nonFlagArgs.length === 1 || !maybeRepoPath)) {
+  // Create a temporary working directory for deliverables/checkpoints
+  const tmpBase = path.join(process.cwd(), 'repos');
+  await fs.ensureDir(tmpBase);
+  const tmpDir = path.join(tmpBase, `blackbox-${Date.now()}`);
+  await fs.ensureDir(tmpDir);
+  repoPathValidation = { valid: true, path: tmpDir };
+} else {
+  const repoPath = maybeRepoPath;
+  repoPathValidation = await validateRepoPath(repoPath);
+  if (!repoPathValidation.valid) {
+    console.log(chalk.red(`❌ Invalid repository path: ${repoPathValidation.error}`));
+    console.log(chalk.gray(`Expected: Accessible local directory path`));
+    process.exit(1);
+  }
 }
 
 // Success - show validated inputs
@@ -473,7 +518,7 @@ if (disableLoader) {
 }
 
 try {
-  const result = await main(webUrl, repoPathValidation.path, configPath, pipelineTestingMode, disableLoader);
+const result = await main(webUrl, repoPathValidation.path, configPath, pipelineTestingMode, disableLoader, blackboxMode, skipMcpPhases);
   console.log(chalk.green.bold('\n📄 FINAL REPORT AVAILABLE:'));
   console.log(chalk.cyan(result.reportPath));
   console.log(chalk.green.bold('\n📂 AUDIT LOGS AVAILABLE:'));
