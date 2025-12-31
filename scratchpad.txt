@@ -1,0 +1,9 @@
+export SHANNON_LLM_PROVIDER=ollama \
+export OPENAI_BASE_URL=http://192.168.1.69:11434/v1 \
+export OPENAI_API_KEY=ollama_api_key \
+export SHANNON_OPENAI_MODEL=gpt-oss:20b \
+export SHANNON_SKIP_MCP_PHASES=1 \
+export SHANNON_RELAX_VALIDATION=1
+
+./shannon.mjs "http://192.168.1.130:3000" "/Users/ss/code/juice-shop" --skip-mcp-phases --relax-validation
+

@@ -453,6 +453,10 @@ async function runClaudePrompt(prompt, sourceDir, allowedTools = 'Read', context
     }
 
     // Return result with log file path for all agents
+    if (!result && messages.length > 0) {
+      result = messages.join('\n');
+    }
+
     const returnData = {
       result,
       success: true,
@@ -596,6 +600,17 @@ export async function runClaudePromptWithRetry(prompt, sourceDir, allowedTools =
 
       // Validate output after successful run
       if (result.success) {
+        const isTextOnly = (process.env.SHANNON_LLM_PROVIDER || '').toLowerCase() === 'openai';
+        if (isTextOnly && agentName === 'pre-recon' && result.result) {
+          const deliverablesDir = path.join(sourceDir, 'deliverables');
+          const deliverablePath = path.join(deliverablesDir, 'code_analysis_deliverable.md');
+          const exists = await fs.pathExists(deliverablePath);
+          if (!exists) {
+            await fs.ensureDir(deliverablesDir);
+            await fs.writeFile(deliverablePath, result.result);
+          }
+        }
+
         const validationPassed = await validateAgentOutput(result, agentName, sourceDir);
 
         if (validationPassed) {
